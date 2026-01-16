@@ -11,7 +11,9 @@ const {
   getPlayer,
   getPlayerAnalytics,
   discoverPlayers,
-  comparePlayers
+  comparePlayers,
+  updatePlayer,
+  deletePlayer
 } = require('../controllers/playersController');
 
 // Public routes (with optional auth for personalization)
@@ -22,5 +24,9 @@ router.get('/:id', validate(schemas.uuidParam), optionalAuth, getPlayer);
 // Agent-only routes
 router.get('/:id/analytics', validate(schemas.uuidParam), authenticate, authorize('agent', 'admin'), getPlayerAnalytics);
 router.post('/compare', authenticate, authorize('agent', 'admin'), comparePlayers);
+
+// Admin-only routes
+router.put('/:id', validate(schemas.uuidParam), authenticate, authorize('admin'), updatePlayer);
+router.delete('/:id', validate(schemas.uuidParam), authenticate, authorize('admin'), deletePlayer);
 
 module.exports = router;

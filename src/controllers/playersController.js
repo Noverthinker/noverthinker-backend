@@ -706,10 +706,119 @@ const comparePlayers = asyncHandler(async (req, res) => {
   });
 });
 
+// @desc    Update player profile
+// @route   PUT /api/players/:id
+// @access  Private (Admin)
+const updatePlayer = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const {
+    firstName,
+    lastName,
+    dateOfBirth,
+    nationality,
+    heightCm,
+    weightKg,
+    preferredFoot,
+    primaryPosition,
+    secondaryPosition
+  } = req.body;
+
+  // Check if player exists
+  const playerResult = await query(
+    `SELECT pp.id, pp.user_id FROM player_profiles pp WHERE pp.id = $1`,
+    [id]
+  );
+
+  if (playerResult.rows.length === 0) {
+    throw new AppError('Player not found', 404, 'PLAYER_NOT_FOUND');
+  }
+
+  const player = playerResult.rows[0];
+
+  // Update user info (first_name, last_name)
+  if (firstName || lastName) {
+    await query(
+      `UPDATE users SET 
+        first_name = COALESCE($1, first_name),
+        last_name = COALESCE($2, last_name),
+        updated_at = NOW()
+       WHERE id = $3`,
+      [firstName, lastName, player.user_id]
+    );
+  }
+
+  // Update player profile
+  const updateResult = await query(
+    `UPDATE player_profiles SET
+       date_of_birth = COALESCE($1, date_of_birth),
+       nationality = COALESCE($2, nationality),
+       height_cm = COALESCE($3, height_cm),
+       weight_kg = COALESCE($4, weight_kg),
+       preferred_foot = COALESCE($5, preferred_foot),
+       primary_position = COALESCE($6, primary_position),
+       secondary_position = $7,
+       updated_at = NOW()
+     WHERE id = $8
+     RETURNING *`,
+    [
+      dateOfBirth,
+      nationality,
+      heightCm,
+      weightKg,
+      preferredFoot,
+      primaryPosition,
+      secondaryPosition,
+      id
+    ]
+  );
+
+  // Clear cache
+  await cache.del(`player:${id}`);
+
+  res.json({
+    success: true,
+    message: 'Player updated successfully',
+    data: updateResult.rows[0]
+  });
+});
+
+// @desc    Delete player
+// @route   DELETE /api/players/:id
+// @access  Private (Admin)
+const deletePlayer = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  // Check if player exists
+  const playerResult = await query(
+    `SELECT pp.id, pp.user_id FROM player_profiles pp WHERE pp.id = $1`,
+    [id]
+  );
+
+  if (playerResult.rows.length === 0) {
+    throw new AppError('Player not found', 404, 'PLAYER_NOT_FOUND');
+  }
+
+  const player = playerResult.rows[0];
+
+  // Delete user (cascade will delete player_profile)
+  await query('DELETE FROM users WHERE id = $1', [player.user_id]);
+
+  // Clear cache
+  await cache.del(`player:${id}`);
+  await cache.del(`analytics:${id}`);
+
+  res.json({
+    success: true,
+    message: 'Player deleted successfully'
+  });
+});
+
 module.exports = {
   getPlayers,
   getPlayer,
   getPlayerAnalytics,
   discoverPlayers,
-  comparePlayers
+  comparePlayers,
+  updatePlayer,
+  deletePlayer
 };
