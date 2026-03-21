@@ -1,8 +1,8 @@
 // =============================================================================
-// NoverThinker Backend - Main Entry Point
+// NoverThinker Backend - Main Entry Point (SPRINT 2 - COMPLETO)
 // =============================================================================
 // Professional Football Scouting Platform API
-// Client: Menelik | Developer: Oscar | Sprint 0
+// Client: Menelik | Developer: Oscar | Sprint 2
 // =============================================================================
 
 require('dotenv').config();
@@ -22,6 +22,7 @@ const { notFound, errorHandler } = require('./middleware/errorHandler');
 // Routes
 const authRoutes = require('./routes/auth');
 const playersRoutes = require('./routes/players');
+const videosRoutes = require('./routes/videos');  // Sprint 2
 
 // Initialize Express
 const app = express();
@@ -83,7 +84,7 @@ app.get('/health', async (req, res) => {
 app.get('/api', (req, res) => {
   res.json({
     name: 'NoverThinker API',
-    version: '1.0.0',
+    version: '1.1.0',  // Updated for Sprint 2
     description: 'Professional Football Scouting Platform API',
     documentation: '/api/docs',
     endpoints: {
@@ -102,12 +103,9 @@ app.get('/api', (req, res) => {
 // Mount routes
 app.use('/api/auth', authRoutes);
 app.use('/api/players', playersRoutes);
+app.use('/api/videos', videosRoutes);  // Sprint 2 - Videos API
 
 // Placeholder routes (to be implemented)
-app.use('/api/videos', (req, res) => {
-  res.json({ message: 'Videos API - Coming soon', status: 'pending' });
-});
-
 app.use('/api/teams', (req, res) => {
   res.json({ message: 'Teams API - Coming soon', status: 'pending' });
 });
@@ -157,7 +155,7 @@ const startServer = async () => {
     app.listen(PORT, () => {
       console.log('');
       console.log('═══════════════════════════════════════════════════');
-      console.log('  🚀 NoverThinker API Server');
+      console.log('  🚀 NoverThinker API Server (Sprint 2)');
       console.log('═══════════════════════════════════════════════════');
       console.log(`  🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`  📡 Server:      http://localhost:${PORT}`);
@@ -165,18 +163,32 @@ const startServer = async () => {
       console.log(`  📚 API:         http://localhost:${PORT}/api`);
       console.log('═══════════════════════════════════════════════════');
       console.log('');
-      console.log('📋 Available Endpoints:');
+      console.log('📋 Auth Endpoints:');
       console.log('  POST   /api/auth/register     - Register new user');
       console.log('  POST   /api/auth/login        - Login user');
       console.log('  POST   /api/auth/refresh      - Refresh token');
       console.log('  POST   /api/auth/logout       - Logout user');
       console.log('  GET    /api/auth/me           - Get current user');
       console.log('');
-      console.log('  GET    /api/players           - Get players (Radar)');
+      console.log('📋 Players Endpoints:');
+      console.log('  GET    /api/players           - Get players (Agent Radar)');
       console.log('  GET    /api/players/discover  - Discover players (Agent)');
+      console.log('  GET    /api/players/radar     - Player Radar feed (Player) [NEW]');
+      console.log('  GET    /api/players/me        - Get my profile (Player) [NEW]');
+      console.log('  PUT    /api/players/me        - Update my profile (Player) [NEW]');
       console.log('  GET    /api/players/:id       - Get player profile');
       console.log('  GET    /api/players/:id/analytics - Get analytics (Agent)');
+      console.log('  POST   /api/players/:id/follow    - Follow player (Player) [NEW]');
+      console.log('  DELETE /api/players/:id/follow    - Unfollow player (Player) [NEW]');
       console.log('  POST   /api/players/compare   - Compare players (Agent)');
+      console.log('');
+      console.log('📋 Videos Endpoints: [NEW - Sprint 2]');
+      console.log('  GET    /api/videos/feed       - Video feed (Player)');
+      console.log('  GET    /api/videos/:id        - Get video details');
+      console.log('  POST   /api/videos/:id/like   - Like video (Player)');
+      console.log('  DELETE /api/videos/:id/like   - Unlike video (Player)');
+      console.log('  GET    /api/videos/:id/comments - Get comments');
+      console.log('  POST   /api/videos/:id/comment  - Add comment (Player)');
       console.log('═══════════════════════════════════════════════════');
       console.log('');
     });

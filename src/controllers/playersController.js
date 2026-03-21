@@ -1,10 +1,14 @@
 // =============================================================================
-// NoverThinker - Players Controller
+// NoverThinker - Players Controller (Sprint 2 COMPLETE)
 // =============================================================================
 
 const { query } = require('../config/database');
 const { cache } = require('../config/redis');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
+
+// =============================================================================
+// EXISTING FUNCTIONS (Sprint 1)
+// =============================================================================
 
 // @desc    Get players for Radar feed
 // @route   GET /api/players
@@ -323,13 +327,6 @@ const getPlayerAnalytics = asyncHandler(async (req, res) => {
 
 // Calculate player analytics
 const calculatePlayerAnalytics = async (playerId, player) => {
-  // This would be a complex calculation based on:
-  // - Match performance history
-  // - Task completion rates
-  // - Attendance records
-  // - NovaScore trends
-
-  // Simplified version for now
   const analytics = {
     performance_data: {
       overall: player.nova_score,
@@ -403,12 +400,12 @@ const discoverPlayers = asyncHandler(async (req, res) => {
   const {
     page = 1,
     limit = 20,
-    positions,       // comma-separated: "ST,CAM,RW"
-    ageGroups,       // comma-separated: "U17,U19"
+    positions,
+    ageGroups,
     minNovaScore,
     maxNovaScore,
     minStars,
-    clubs,           // comma-separated club IDs
+    clubs,
     nationality,
     preferredFoot,
     minHeight,
@@ -423,7 +420,6 @@ const discoverPlayers = asyncHandler(async (req, res) => {
 
   let whereClause = 'WHERE pp.profile_visibility = \'public\'';
 
-  // Multiple positions filter
   if (positions) {
     const posArray = positions.split(',');
     whereClause += ` AND (pp.primary_position = ANY($${paramIndex}) OR pp.secondary_position = ANY($${paramIndex}))`;
@@ -431,7 +427,6 @@ const discoverPlayers = asyncHandler(async (req, res) => {
     paramIndex++;
   }
 
-  // Multiple age groups filter
   if (ageGroups) {
     const ageArray = ageGroups.split(',');
     whereClause += ` AND pp.age_group = ANY($${paramIndex})`;
@@ -488,12 +483,10 @@ const discoverPlayers = asyncHandler(async (req, res) => {
     paramIndex++;
   }
 
-  // Valid sort columns for discover
   const validSortColumns = ['nova_score', 'stars', 'discipline_score', 'nova_score_trend', 'total_goals'];
   const sortColumn = validSortColumns.includes(sortBy) ? sortBy : 'nova_score';
   const order = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
-  // Get total count
   const countResult = await query(
     `SELECT COUNT(DISTINCT pp.id) as total
      FROM player_profiles pp
@@ -507,7 +500,6 @@ const discoverPlayers = asyncHandler(async (req, res) => {
 
   const total = parseInt(countResult.rows[0].total);
 
-  // Get players with all relevant data for agents
   const playersResult = await query(
     `SELECT DISTINCT ON (pp.id)
        pp.id,
@@ -548,7 +540,6 @@ const discoverPlayers = asyncHandler(async (req, res) => {
     [...params, parseInt(limit), offset]
   );
 
-  // Check if any are in agent's watchlist
   if (req.user && req.user.userType === 'agent') {
     const agentProfile = await query(
       'SELECT id FROM agent_profiles WHERE user_id = $1',
@@ -604,7 +595,6 @@ const comparePlayers = asyncHandler(async (req, res) => {
     throw new AppError('Please provide 2-4 player IDs to compare', 400);
   }
 
-  // Get all players with their details
   const playersResult = await query(
     `SELECT 
        pp.*,
@@ -634,7 +624,6 @@ const comparePlayers = asyncHandler(async (req, res) => {
     throw new AppError('Could not find enough players to compare', 404);
   }
 
-  // Get analytics for each player
   const analyticsPromises = playersResult.rows.map(async (player) => {
     const analyticsResult = await query(
       'SELECT * FROM agent_analytics_cache WHERE player_id = $1',
@@ -648,7 +637,6 @@ const comparePlayers = asyncHandler(async (req, res) => {
 
   const analyticsData = await Promise.all(analyticsPromises);
 
-  // Format comparison data
   const comparison = playersResult.rows.map(player => {
     const playerAnalytics = analyticsData.find(a => a.playerId === player.id)?.analytics;
     
@@ -723,7 +711,6 @@ const updatePlayer = asyncHandler(async (req, res) => {
     secondaryPosition
   } = req.body;
 
-  // Check if player exists
   const playerResult = await query(
     `SELECT pp.id, pp.user_id FROM player_profiles pp WHERE pp.id = $1`,
     [id]
@@ -735,7 +722,6 @@ const updatePlayer = asyncHandler(async (req, res) => {
 
   const player = playerResult.rows[0];
 
-  // Update user info (first_name, last_name)
   if (firstName || lastName) {
     await query(
       `UPDATE users SET 
@@ -747,7 +733,6 @@ const updatePlayer = asyncHandler(async (req, res) => {
     );
   }
 
-  // Update player profile
   const updateResult = await query(
     `UPDATE player_profiles SET
        date_of_birth = COALESCE($1, date_of_birth),
@@ -772,7 +757,6 @@ const updatePlayer = asyncHandler(async (req, res) => {
     ]
   );
 
-  // Clear cache
   await cache.del(`player:${id}`);
 
   res.json({
@@ -788,7 +772,6 @@ const updatePlayer = asyncHandler(async (req, res) => {
 const deletePlayer = asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  // Check if player exists
   const playerResult = await query(
     `SELECT pp.id, pp.user_id FROM player_profiles pp WHERE pp.id = $1`,
     [id]
@@ -800,10 +783,8 @@ const deletePlayer = asyncHandler(async (req, res) => {
 
   const player = playerResult.rows[0];
 
-  // Delete user (cascade will delete player_profile)
   await query('DELETE FROM users WHERE id = $1', [player.user_id]);
 
-  // Clear cache
   await cache.del(`player:${id}`);
   await cache.del(`analytics:${id}`);
 
@@ -813,6 +794,538 @@ const deletePlayer = asyncHandler(async (req, res) => {
   });
 });
 
+// =============================================================================
+// SPRINT 2 - NEW FUNCTIONS
+// =============================================================================
+
+// @desc    Get Player Radar feed (algorithmic discovery for players)
+// @route   GET /api/players/radar
+// @access  Private (Player)
+const getPlayerRadar = asyncHandler(async (req, res) => {
+  const {
+    page = 1,
+    limit = 20
+  } = req.query;
+
+  const offset = (page - 1) * limit;
+  const userId = req.user.id;
+
+  // Get current player's profile for algorithmic matching
+  const currentPlayerResult = await query(
+    `SELECT id, nova_score, primary_position, age_group 
+     FROM player_profiles WHERE user_id = $1`,
+    [userId]
+  );
+
+  if (currentPlayerResult.rows.length === 0) {
+    throw new AppError('Player profile not found', 404);
+  }
+
+  const currentPlayer = currentPlayerResult.rows[0];
+
+  // Player Radar Algorithm (from Menelik's specs):
+  // 30% - Similar performance level (NovaScore proximity)
+  // 20% - Position and age match
+  // 25% - Activity and engagement
+  // 15% - Trend / improvement
+  // 10% - Random distribution
+
+  const playersResult = await query(
+    `SELECT 
+       pp.id,
+       pp.user_id,
+       u.first_name,
+       u.last_name,
+       u.avatar_url,
+       pp.date_of_birth,
+       pp.age_group,
+       pp.nationality,
+       pp.height_cm,
+       pp.primary_position,
+       pp.secondary_position,
+       pp.nova_score,
+       pp.nova_score_trend,
+       pp.stars,
+       pp.star_type,
+       pp.discipline_score,
+       pp.total_matches,
+       pp.total_videos,
+       t.name as team_name,
+       c.name as club_name,
+       c.logo_url as club_logo,
+       pa.pace,
+       pa.shooting,
+       pa.passing,
+       pa.dribbling,
+       pa.defending,
+       pa.physical,
+       EXISTS(SELECT 1 FROM player_follows pf WHERE pf.follower_id = $1 AND pf.following_id = pp.id) as is_following,
+       (
+         (30 - ABS(pp.nova_score - $2) * 0.3) +
+         (CASE WHEN pp.primary_position = $3 AND pp.age_group = $4 THEN 20
+               WHEN pp.primary_position = $3 OR pp.age_group = $4 THEN 10
+               ELSE 0 END) +
+         (LEAST(pp.total_videos, 10) * 2.5) +
+         (CASE WHEN pp.nova_score_trend > 0 THEN 15 
+               WHEN pp.nova_score_trend = 0 THEN 7.5
+               ELSE 0 END) +
+         (RANDOM() * 10)
+       ) as radar_score
+     FROM player_profiles pp
+     JOIN users u ON u.id = pp.user_id
+     LEFT JOIN player_attributes pa ON pa.player_id = pp.id
+     LEFT JOIN team_players tp ON tp.player_id = pp.id AND tp.is_active = true
+     LEFT JOIN teams t ON t.id = tp.team_id
+     LEFT JOIN clubs c ON c.id = t.club_id
+     WHERE pp.profile_visibility = 'public'
+       AND pp.id != $1
+     ORDER BY radar_score DESC, pp.nova_score DESC
+     LIMIT $5 OFFSET $6`,
+    [
+      currentPlayer.id,
+      currentPlayer.nova_score,
+      currentPlayer.primary_position,
+      currentPlayer.age_group,
+      parseInt(limit),
+      offset
+    ]
+  );
+
+  const countResult = await query(
+    `SELECT COUNT(*) as total
+     FROM player_profiles pp
+     WHERE pp.profile_visibility = 'public'
+       AND pp.id != $1`,
+    [currentPlayer.id]
+  );
+
+  const total = parseInt(countResult.rows[0].total);
+
+  // Get recent video for each player
+  const playerIds = playersResult.rows.map(p => p.id);
+  let playerVideos = {};
+  
+  if (playerIds.length > 0) {
+    const videosResult = await query(
+      `SELECT DISTINCT ON (v.player_id)
+         v.player_id,
+         v.id as video_id,
+         v.title,
+         v.video_url,
+         v.thumbnail_url,
+         v.category,
+         v.likes_count,
+         v.views_count
+       FROM videos v
+       WHERE v.player_id = ANY($1)
+         AND v.status = 'approved'
+         AND v.visibility = 'public'
+       ORDER BY v.player_id, v.created_at DESC`,
+      [playerIds]
+    );
+    
+    videosResult.rows.forEach(v => {
+      playerVideos[v.player_id] = v;
+    });
+  }
+
+  res.json({
+    success: true,
+    data: {
+      players: playersResult.rows.map(p => ({
+        id: p.id,
+        user_id: p.user_id,
+        first_name: p.first_name,
+        last_name: p.last_name,
+        full_name: `${p.first_name} ${p.last_name}`,
+        avatar_url: p.avatar_url,
+        date_of_birth: p.date_of_birth,
+        age_group: p.age_group,
+        nationality: p.nationality,
+        height_cm: p.height_cm,
+        position: p.primary_position,
+        secondary_position: p.secondary_position,
+        nova_score: parseFloat(p.nova_score),
+        nova_score_trend: parseFloat(p.nova_score_trend),
+        stars: parseFloat(p.stars),
+        star_type: p.star_type,
+        discipline_score: p.discipline_score,
+        total_matches: p.total_matches,
+        total_videos: p.total_videos,
+        team: p.team_name,
+        club: p.club_name,
+        club_logo: p.club_logo,
+        is_following: p.is_following,
+        attributes: {
+          pace: p.pace,
+          shooting: p.shooting,
+          passing: p.passing,
+          dribbling: p.dribbling,
+          defending: p.defending,
+          physical: p.physical
+        },
+        overall: p.pace && p.shooting ? 
+          Math.round((p.pace + p.shooting + p.passing + p.dribbling + p.defending + p.physical) / 6) : null,
+        latest_video: playerVideos[p.id] || null
+      })),
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    }
+  });
+});
+
+// @desc    Follow a player
+// @route   POST /api/players/:id/follow
+// @access  Private (Player)
+const followPlayer = asyncHandler(async (req, res) => {
+  const { id: targetPlayerId } = req.params;
+  const userId = req.user.id;
+
+  const followerResult = await query(
+    'SELECT id FROM player_profiles WHERE user_id = $1',
+    [userId]
+  );
+
+  if (followerResult.rows.length === 0) {
+    throw new AppError('Player profile not found', 404);
+  }
+
+  const followerId = followerResult.rows[0].id;
+
+  const targetResult = await query(
+    'SELECT id, user_id FROM player_profiles WHERE id = $1',
+    [targetPlayerId]
+  );
+
+  if (targetResult.rows.length === 0) {
+    throw new AppError('Target player not found', 404);
+  }
+
+  if (followerId === targetPlayerId) {
+    throw new AppError('You cannot follow yourself', 400);
+  }
+
+  const existingFollow = await query(
+    'SELECT id FROM player_follows WHERE follower_id = $1 AND following_id = $2',
+    [followerId, targetPlayerId]
+  );
+
+  if (existingFollow.rows.length > 0) {
+    throw new AppError('You are already following this player', 400);
+  }
+
+  await query(
+    'INSERT INTO player_follows (follower_id, following_id) VALUES ($1, $2)',
+    [followerId, targetPlayerId]
+  );
+
+  const followerCountResult = await query(
+    'SELECT COUNT(*) as count FROM player_follows WHERE following_id = $1',
+    [targetPlayerId]
+  );
+
+  res.status(201).json({
+    success: true,
+    message: 'Successfully followed player',
+    data: {
+      following_id: targetPlayerId,
+      followers_count: parseInt(followerCountResult.rows[0].count)
+    }
+  });
+});
+
+// @desc    Unfollow a player
+// @route   DELETE /api/players/:id/follow
+// @access  Private (Player)
+const unfollowPlayer = asyncHandler(async (req, res) => {
+  const { id: targetPlayerId } = req.params;
+  const userId = req.user.id;
+
+  const followerResult = await query(
+    'SELECT id FROM player_profiles WHERE user_id = $1',
+    [userId]
+  );
+
+  if (followerResult.rows.length === 0) {
+    throw new AppError('Player profile not found', 404);
+  }
+
+  const followerId = followerResult.rows[0].id;
+
+  const existingFollow = await query(
+    'SELECT id FROM player_follows WHERE follower_id = $1 AND following_id = $2',
+    [followerId, targetPlayerId]
+  );
+
+  if (existingFollow.rows.length === 0) {
+    throw new AppError('You are not following this player', 400);
+  }
+
+  await query(
+    'DELETE FROM player_follows WHERE follower_id = $1 AND following_id = $2',
+    [followerId, targetPlayerId]
+  );
+
+  const followerCountResult = await query(
+    'SELECT COUNT(*) as count FROM player_follows WHERE following_id = $1',
+    [targetPlayerId]
+  );
+
+  res.json({
+    success: true,
+    message: 'Successfully unfollowed player',
+    data: {
+      unfollowed_id: targetPlayerId,
+      followers_count: parseInt(followerCountResult.rows[0].count)
+    }
+  });
+});
+
+// @desc    Get current player's own profile
+// @route   GET /api/players/me
+// @access  Private (Player)
+const getMyProfile = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+
+  const playerResult = await query(
+    `SELECT 
+       pp.*,
+       u.first_name,
+       u.last_name,
+       u.email,
+       u.avatar_url,
+       u.phone,
+       pa.pace,
+       pa.shooting,
+       pa.passing,
+       pa.dribbling,
+       pa.defending,
+       pa.physical,
+       pa.aggression,
+       pa.composure,
+       pa.concentration,
+       t.id as team_id,
+       t.name as team_name,
+       t.age_group as team_age_group,
+       c.id as club_id,
+       c.name as club_name,
+       c.logo_url as club_logo,
+       c.city as club_city
+     FROM player_profiles pp
+     JOIN users u ON u.id = pp.user_id
+     LEFT JOIN player_attributes pa ON pa.player_id = pp.id
+     LEFT JOIN team_players tp ON tp.player_id = pp.id AND tp.is_active = true
+     LEFT JOIN teams t ON t.id = tp.team_id
+     LEFT JOIN clubs c ON c.id = t.club_id
+     WHERE pp.user_id = $1`,
+    [userId]
+  );
+
+  if (playerResult.rows.length === 0) {
+    throw new AppError('Player profile not found', 404);
+  }
+
+  const player = playerResult.rows[0];
+
+  const followersResult = await query(
+    'SELECT COUNT(*) as count FROM player_follows WHERE following_id = $1',
+    [player.id]
+  );
+
+  const followingResult = await query(
+    'SELECT COUNT(*) as count FROM player_follows WHERE follower_id = $1',
+    [player.id]
+  );
+
+  const videosResult = await query(
+    `SELECT v.id, v.title, v.video_url, v.thumbnail_url, v.category, 
+            v.likes_count, v.views_count, v.created_at
+     FROM videos v
+     WHERE v.player_id = $1 AND v.status = 'approved'
+     ORDER BY v.likes_count DESC, v.created_at DESC
+     LIMIT 3`,
+    [player.id]
+  );
+
+  const historyResult = await query(
+    `SELECT recorded_date, nova_score, match_score, task_score, video_score, physical_score
+     FROM nova_score_history
+     WHERE player_id = $1
+     ORDER BY recorded_date DESC
+     LIMIT 30`,
+    [player.id]
+  );
+
+  const badgesResult = await query(
+    `SELECT b.name, b.description, b.icon_url, b.tier, pb.earned_at
+     FROM player_badges pb
+     JOIN badges b ON b.id = pb.badge_id
+     WHERE pb.player_id = $1
+     ORDER BY pb.earned_at DESC`,
+    [player.id]
+  );
+
+  const overall = player.pace ? 
+    Math.round((player.pace + player.shooting + player.passing + 
+                player.dribbling + player.defending + player.physical) / 6) : 50;
+
+  res.json({
+    success: true,
+    data: {
+      profile: {
+        id: player.id,
+        user_id: player.user_id,
+        first_name: player.first_name,
+        last_name: player.last_name,
+        full_name: `${player.first_name} ${player.last_name}`,
+        email: player.email,
+        phone: player.phone,
+        avatar_url: player.avatar_url,
+        date_of_birth: player.date_of_birth,
+        age_group: player.age_group,
+        nationality: player.nationality,
+        height_cm: player.height_cm,
+        weight_kg: player.weight_kg,
+        preferred_foot: player.preferred_foot,
+        position: player.primary_position,
+        secondary_position: player.secondary_position,
+        jersey_number: player.jersey_number
+      },
+      scores: {
+        nova_score: parseFloat(player.nova_score),
+        nova_score_trend: parseFloat(player.nova_score_trend),
+        overall_score: overall,
+        stars: parseFloat(player.stars),
+        star_type: player.star_type,
+        discipline_score: player.discipline_score,
+        breakdown: {
+          match_score: parseFloat(player.match_score),
+          task_score: parseFloat(player.task_score),
+          video_score: parseFloat(player.video_score),
+          physical_score: parseFloat(player.physical_score)
+        }
+      },
+      attributes: {
+        pace: player.pace,
+        shooting: player.shooting,
+        passing: player.passing,
+        dribbling: player.dribbling,
+        defending: player.defending,
+        physical: player.physical,
+        mental: {
+          aggression: player.aggression,
+          composure: player.composure,
+          concentration: player.concentration
+        }
+      },
+      stats: {
+        total_matches: player.total_matches,
+        total_goals: player.total_goals,
+        total_assists: player.total_assists,
+        total_videos: player.total_videos,
+        total_tasks_completed: player.total_tasks_completed,
+        followers_count: parseInt(followersResult.rows[0].count),
+        following_count: parseInt(followingResult.rows[0].count)
+      },
+      team: player.team_id ? {
+        id: player.team_id,
+        name: player.team_name,
+        age_group: player.team_age_group
+      } : null,
+      club: player.club_id ? {
+        id: player.club_id,
+        name: player.club_name,
+        logo: player.club_logo,
+        city: player.club_city
+      } : null,
+      top_videos: videosResult.rows,
+      badges: badgesResult.rows,
+      nova_score_history: historyResult.rows,
+      profile_visibility: player.profile_visibility
+    }
+  });
+});
+
+// @desc    Update current player's profile
+// @route   PUT /api/players/me
+// @access  Private (Player)
+const updateMyProfile = asyncHandler(async (req, res) => {
+  const userId = req.user.id;
+  const {
+    firstName,
+    lastName,
+    phone,
+    nationality,
+    heightCm,
+    weightKg,
+    preferredFoot,
+    secondaryPosition,
+    jerseyNumber,
+    profileVisibility
+  } = req.body;
+
+  const playerResult = await query(
+    'SELECT id FROM player_profiles WHERE user_id = $1',
+    [userId]
+  );
+
+  if (playerResult.rows.length === 0) {
+    throw new AppError('Player profile not found', 404);
+  }
+
+  const playerId = playerResult.rows[0].id;
+
+  if (firstName || lastName || phone) {
+    await query(
+      `UPDATE users SET
+         first_name = COALESCE($1, first_name),
+         last_name = COALESCE($2, last_name),
+         phone = COALESCE($3, phone),
+         updated_at = NOW()
+       WHERE id = $4`,
+      [firstName, lastName, phone, userId]
+    );
+  }
+
+  const updateResult = await query(
+    `UPDATE player_profiles SET
+       nationality = COALESCE($1, nationality),
+       height_cm = COALESCE($2, height_cm),
+       weight_kg = COALESCE($3, weight_kg),
+       preferred_foot = COALESCE($4, preferred_foot),
+       secondary_position = $5,
+       jersey_number = COALESCE($6, jersey_number),
+       profile_visibility = COALESCE($7, profile_visibility),
+       updated_at = NOW()
+     WHERE id = $8
+     RETURNING *`,
+    [
+      nationality,
+      heightCm,
+      weightKg,
+      preferredFoot,
+      secondaryPosition,
+      jerseyNumber,
+      profileVisibility,
+      playerId
+    ]
+  );
+
+  res.json({
+    success: true,
+    message: 'Profile updated successfully',
+    data: updateResult.rows[0]
+  });
+});
+
+// =============================================================================
+// EXPORTS
+// =============================================================================
+
 module.exports = {
   getPlayers,
   getPlayer,
@@ -820,5 +1333,11 @@ module.exports = {
   discoverPlayers,
   comparePlayers,
   updatePlayer,
-  deletePlayer
+  deletePlayer,
+  // Sprint 2 additions
+  getPlayerRadar,
+  followPlayer,
+  unfollowPlayer,
+  getMyProfile,
+  updateMyProfile
 };
